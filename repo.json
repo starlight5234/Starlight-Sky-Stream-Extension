@@ -1,0 +1,9 @@
+{
+  "name": "Starlight's Sky Stream Extension",
+  "packageName": "dev.starlight.skystream",
+  "description": "SkyStream plugins repository from Starlight",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/starlight5234/Starlight-Sky-Stream-Extension/main/dist/plugins.json"
+  ]
+}
