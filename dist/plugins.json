@@ -1,0 +1,20 @@
+[
+  {
+    "packageName": "dev.starlight.skystream.starscrape",
+    "name": "StarScrape",
+    "version": 1,
+    "baseUrl": "https://watch32to.com",
+    "description": "StarScrape Multi-Server Movie & TV Show Provider",
+    "authors": [
+      "Starlight"
+    ],
+    "languages": [
+      "en"
+    ],
+    "categories": [
+      "Movie",
+      "TvSeries"
+    ],
+    "url": "https://raw.githubusercontent.com/starlight5234/Starlight-Sky-Stream-Extension/main/dist/dev.starlight.skystream.starscrape.sky"
+  }
+]
