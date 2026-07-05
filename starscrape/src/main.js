@@ -7,7 +7,7 @@ async function getHome(cb) {
         const data = await fetchHomeCategories();
         cb({ success: true, data: data });
     } catch (e) {
-        cb({ success: false, errorCode: "HOME_ERROR", message: e.stack || String(e) });
+        cb({ success: false, errorCode: "HOME_ERROR", message: toMessage(e) });
     }
 }
 
@@ -32,7 +32,7 @@ async function search(query, page, cb) {
         const items = await searchMedia(query, realPage);
         if (realCb) realCb({ success: true, data: items });
     } catch (e) {
-        if (realCb) realCb({ success: false, errorCode: "SEARCH_ERROR", message: e.stack || String(e) });
+        if (realCb) realCb({ success: false, errorCode: "SEARCH_ERROR", message: toMessage(e) });
     }
 }
 
@@ -46,7 +46,7 @@ async function load(url, cb) {
         const details = await fetchMediaDetails(url);
         cb({ success: true, data: details });
     } catch (e) {
-        cb({ success: false, errorCode: "LOAD_ERROR", message: e.stack || String(e) });
+        cb({ success: false, errorCode: "LOAD_ERROR", message: toMessage(e) });
     }
 }
 
@@ -88,8 +88,11 @@ async function loadStreams(url, cb) {
 
         // Fetch details from TMDB to obtain required metadata for alternative resolvers
         const type = isTv ? "tv" : "movie";
-        const detailsRes = await http_get(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${apiKey}&append_to_response=external_ids`);
-        const details = JSON.parse(detailsRes.body);
+        const detailsRes = await httpGetWithRetry(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${apiKey}&append_to_response=external_ids`);
+        if (!detailsRes || detailsRes.code !== 200) {
+            throw new Error("Failed to fetch TMDB metadata for stream resolution: HTTP " + (detailsRes ? detailsRes.code : "unknown") + (detailsRes && detailsRes.error ? " (" + detailsRes.error + ")" : ""));
+        }
+        const details = parseJsonSafe(detailsRes.body);
 
         const title = details.title || details.name || details.original_title || details.original_name || "";
         const year = (details.release_date || details.first_air_date || "").substring(0, 4);
@@ -111,7 +114,7 @@ async function loadStreams(url, cb) {
 
         cb({ success: true, data: streams });
     } catch (e) {
-        cb({ success: false, errorCode: "STREAM_ERROR", message: e.stack || String(e) });
+        cb({ success: false, errorCode: "STREAM_ERROR", message: toMessage(e) });
     }
 }
 

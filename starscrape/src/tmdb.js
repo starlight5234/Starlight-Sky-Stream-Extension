@@ -1,5 +1,49 @@
 const TMDB_API_KEY = "TMDB_API_KEY_PLACEHOLDER";
 
+function parseJsonSafe(text, fallback = {}) {
+    if (!text) return fallback;
+    try {
+        return JSON.parse(text);
+    } catch (_) {
+        return fallback;
+    }
+}
+
+function toMessage(e) {
+    if (!e) return "Unknown error";
+    if (typeof e === "string") return e;
+    const msg = String(e.message || e);
+    const stack = e.stack ? String(e.stack).trim() : "";
+    if (stack && stack !== "@") {
+        return msg + "\n" + stack;
+    }
+    return msg;
+}
+
+async function httpGetWithRetry(url, headers = {}, retries = 2) {
+    for (let i = 0; i <= retries; i++) {
+        try {
+            const res = await http_get(url, headers);
+            if (res && res.code === 200) {
+                return res;
+            }
+            console.warn(`GET ${url} attempt ${i + 1} failed: HTTP ${res ? res.code : "unknown"}`);
+        } catch (e) {
+            console.warn(`GET ${url} attempt ${i + 1} threw: ${e}`);
+        }
+        if (i < retries) {
+            await new Promise(resolve => {
+                if (typeof setTimeout !== "undefined") {
+                    setTimeout(resolve, 300);
+                } else {
+                    resolve();
+                }
+            });
+        }
+    }
+    return null;
+}
+
 /**
  * Parses standard TMDB results into MultimediaItems compatible with SkyStream.
  */
@@ -29,9 +73,9 @@ async function fetchHomeCategories() {
         { url: `https://api.themoviedb.org/3/tv/popular?api_key=${apiKey}`, method: "GET", headers: {} }
     ]);
 
-    const trendingData = JSON.parse(results[0].body).results || [];
-    const moviesData = JSON.parse(results[1].body).results || [];
-    const tvData = JSON.parse(results[2].body).results || [];
+    const trendingData = parseJsonSafe(results[0] && results[0].body).results || [];
+    const moviesData = parseJsonSafe(results[1] && results[1].body).results || [];
+    const tvData = parseJsonSafe(results[2] && results[2].body).results || [];
 
     const trendingCards = trendingData.map(item => parseTmdbItem(item));
     const moviesCards = moviesData.map(item => parseTmdbItem(item, "movie"));
@@ -51,8 +95,11 @@ async function searchMedia(query, page) {
     const apiKey = TMDB_API_KEY;
     const searchUrl = `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&query=${encodeURIComponent(query)}&page=${page}`;
 
-    const res = await http_get(searchUrl);
-    const data = JSON.parse(res.body);
+    const res = await httpGetWithRetry(searchUrl);
+    if (!res || res.code !== 200) {
+        throw new Error("Search failed: HTTP " + (res ? res.code : "unknown") + (res && res.error ? " (" + res.error + ")" : ""));
+    }
+    const data = parseJsonSafe(res.body);
     const results = data.results || [];
 
     return results
@@ -61,7 +108,7 @@ async function searchMedia(query, page) {
 }
 
 /**
- * Fetches movie/show details including TV seasons and episodes.
+ * Searches for movie/show listings.
  */
 async function fetchMediaDetails(url) {
     const apiKey = TMDB_API_KEY;
@@ -74,8 +121,11 @@ async function fetchMediaDetails(url) {
     }
 
     const type = isTv ? "tv" : "movie";
-    const detailsRes = await http_get(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${apiKey}`);
-    const details = JSON.parse(detailsRes.body);
+    const detailsRes = await httpGetWithRetry(`https://api.themoviedb.org/3/${type}/${tmdbId}?api_key=${apiKey}`);
+    if (!detailsRes || detailsRes.code !== 200) {
+        throw new Error("Failed to fetch TMDB media details: HTTP " + (detailsRes ? detailsRes.code : "unknown") + (detailsRes && detailsRes.error ? " (" + detailsRes.error + ")" : ""));
+    }
+    const details = parseJsonSafe(detailsRes.body);
 
     const titleText = details.title || details.name || details.original_title || details.original_name || "Unknown Title";
     const description = details.overview || "";
@@ -100,37 +150,50 @@ async function fetchMediaDetails(url) {
     }
 
     const seasons = details.seasons || [];
-    const seasonRequests = seasons
-        .map(s => s.season_number)
-        .filter(n => n > 0)
-        .map(sNum => ({
-            url: `https://api.themoviedb.org/3/tv/${tmdbId}/season/${sNum}?api_key=${apiKey}`,
-            method: "GET",
-            headers: {}
-        }));
+    const activeSeasons = seasons.filter(s => s && s.season_number > 0);
+    const seasonPromises = activeSeasons.map(s => 
+        httpGetWithRetry(`https://api.themoviedb.org/3/tv/${tmdbId}/season/${s.season_number}?api_key=${apiKey}`)
+    );
 
-    const seasonResults = await http_parallel(seasonRequests);
+    const seasonResults = await Promise.all(seasonPromises);
     const episodes = [];
 
-    for (let sIdx = 0; sIdx < seasonResults.length; sIdx++) {
-        const sData = JSON.parse(seasonResults[sIdx].body);
-        const sNum = sData.season_number;
-        const eps = sData.episodes || [];
+    for (let i = 0; i < activeSeasons.length; i++) {
+        const s = activeSeasons[i];
+        const sNum = s.season_number;
+        const sRes = seasonResults[i];
 
-        for (let eIdx = 0; eIdx < eps.length; eIdx++) {
-            const ep = eps[eIdx];
-            const epTitle = ep.name || `Episode ${ep.episode_number}`;
-            const epNum = ep.episode_number;
-            const epPoster = ep.still_path ? `https://image.tmdb.org/t/p/w300${ep.still_path}` : posterUrl;
-            const epUrl = `https://watch32to.com/watch/tv/${tmdbId}/${sNum}/${epNum}`;
+        if (sRes && sRes.code === 200) {
+            const sData = parseJsonSafe(sRes.body);
+            const eps = sData.episodes || [];
+            for (let eIdx = 0; eIdx < eps.length; eIdx++) {
+                const ep = eps[eIdx];
+                const epTitle = ep.name || `Episode ${ep.episode_number}`;
+                const epNum = ep.episode_number;
+                const epPoster = ep.still_path ? `https://image.tmdb.org/t/p/w300${ep.still_path}` : posterUrl;
+                const epUrl = `https://watch32to.com/watch/tv/${tmdbId}/${sNum}/${epNum}`;
 
-            episodes.push(new Episode({
-                name: epTitle,
-                url: epUrl,
-                season: sNum,
-                episode: epNum,
-                posterUrl: epPoster
-            }));
+                episodes.push(new Episode({
+                    name: epTitle,
+                    url: epUrl,
+                    season: sNum,
+                    episode: epNum,
+                    posterUrl: epPoster
+                }));
+            }
+        } else {
+            console.warn(`Failed to fetch season ${sNum} details (HTTP ${sRes ? sRes.code : "unknown"}), using fallback generation.`);
+            const epCount = s.episode_count || 0;
+            const seasonPoster = s.poster_path ? `https://image.tmdb.org/t/p/w300${s.poster_path}` : posterUrl;
+            for (let epNum = 1; epNum <= epCount; epNum++) {
+                episodes.push(new Episode({
+                    name: `Episode ${epNum}`,
+                    url: `https://watch32to.com/watch/tv/${tmdbId}/${sNum}/${epNum}`,
+                    season: sNum,
+                    episode: epNum,
+                    posterUrl: seasonPoster
+                }));
+            }
         }
     }
 
